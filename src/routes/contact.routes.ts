@@ -53,7 +53,8 @@ ${message}
         logger.info('Contact form submitted', { email, subject });
       } catch (emailError) {
         // Ne pas bloquer la réponse si l'email échoue
-        logger.warn('Failed to send contact email', { error: emailError });
+        const errorMsg = emailError instanceof Error ? emailError.message : String(emailError);
+        logger.warn('Failed to send contact email', { error: errorMsg });
       }
 
       // Envoyer un email de confirmation au client (optionnel)
@@ -80,7 +81,8 @@ GirlyCrea
         });
       } catch (confirmationError) {
         // Non-bloquant
-        logger.warn('Failed to send confirmation email', { error: confirmationError });
+        const errorMsg = confirmationError instanceof Error ? confirmationError.message : String(confirmationError);
+        logger.warn('Failed to send confirmation email', { error: errorMsg });
       }
 
       return res.status(200).json({
@@ -88,7 +90,8 @@ GirlyCrea
         message: 'Votre message a été envoyé avec succès. Nous vous répondrons rapidement.',
       });
     } catch (error) {
-      logger.error('Contact form error', { error });
+      const errorObj = error instanceof Error ? error : new Error(String(error));
+      logger.error('Contact form error', errorObj);
       return res.status(500).json({
         error: 'Une erreur est survenue lors de l\'envoi de votre message. Veuillez réessayer.',
       });

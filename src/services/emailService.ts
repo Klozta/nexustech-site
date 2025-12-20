@@ -318,13 +318,12 @@ export function generateAbandonedCartEmailHTML(
 
     <p>Bonjour,</p>
     <p>
-      ${
-        emailType === 'second'
-          ? promoCode
-            ? `Nous vous offrons un code promo exclusif <strong>${promoCode}</strong> pour vous aider à finaliser votre achat ! Profitez de -10% sur votre panier.`
-            : 'Nous vous envoyons un dernier rappel : vous avez toujours des articles dans votre panier. Ne les manquez pas !'
-          : 'Nous avons remarqué que vous avez laissé des articles dans votre panier. Ne les oubliez pas !'
-      }
+      ${emailType === 'second'
+      ? promoCode
+        ? `Nous vous offrons un code promo exclusif <strong>${promoCode}</strong> pour vous aider à finaliser votre achat ! Profitez de -10% sur votre panier.`
+        : 'Nous vous envoyons un dernier rappel : vous avez toujours des articles dans votre panier. Ne les manquez pas !'
+      : 'Nous avons remarqué que vous avez laissé des articles dans votre panier. Ne les oubliez pas !'
+    }
     </p>
 
     ${promoCode ? `

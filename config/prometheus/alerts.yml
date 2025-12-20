@@ -1,0 +1,203 @@
+# Règles d'alerting Prometheus pour GirlyCrea
+# Basées sur recommandations Perplexity 2025
+#
+# Usage: Configurer dans Prometheus avec:
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ['alertmanager:9093']
+# rule_files:
+#   - 'config/prometheus/alerts.yml'
+
+groups:
+  - name: express_saas_critical
+    interval: 30s
+    rules:
+      # === CRITIQUES ===
+
+      # Taux d'erreur élevé (>5% pendant 2min)
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status_code=~"5.."}[5m])) by (service)
+            /
+            sum(rate(http_requests_total[5m])) by (service)
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+          sla_impact: 'high'
+          team: 'backend'
+        annotations:
+          summary: "Taux d'erreur {{ $value | humanizePercentage }} sur {{ $labels.service }}"
+          description: |
+            Le service {{ $labels.service }} a un taux d'erreur de {{ $value | humanizePercentage }}.
+            SLA en danger - action immédiate requise.
+          runbook_url: "https://docs.example.com/runbooks/high-error-rate"
+
+      # Latence P99 élevée (>1s pendant 5min)
+      - alert: HighLatencyP99
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, service, route)
+          ) > 1
+        for: 5m
+        labels:
+          severity: critical
+          sla_impact: 'high'
+          team: 'backend'
+        annotations:
+          summary: "Latence P99 de {{ $value }}s sur {{ $labels.service }}{{ $labels.route }}"
+          description: |
+            La latence P99 est de {{ $value }}s pour {{ $labels.service }}{{ $labels.route }}.
+            Impact utilisateur significatif.
+          runbook_url: "https://docs.example.com/runbooks/high-latency"
+
+      # Base de données inaccessible
+      - alert: DatabaseDown
+        expr: |
+          up{job="database"} == 0
+          OR
+          db_query_duration_seconds_count == 0
+        for: 1m
+        labels:
+          severity: critical
+          sla_impact: 'critical'
+          team: 'backend'
+        annotations:
+          summary: "Base de données {{ $labels.instance }} inaccessible"
+          description: |
+            La base de données {{ $labels.instance }} ne répond plus.
+            Vérifier la connexion et l'état du service.
+          runbook_url: "https://docs.example.com/runbooks/database-down"
+
+      # Service complètement down
+      - alert: ServiceDown
+        expr: |
+          up{job=~".*api.*"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          sla_impact: 'critical'
+          team: 'backend'
+        annotations:
+          summary: "Service {{ $labels.job }} complètement down"
+          description: |
+            Le service {{ $labels.job }} ne répond plus aux health checks.
+            Vérifier l'état du déploiement et des instances.
+          runbook_url: "https://docs.example.com/runbooks/service-down"
+
+  - name: express_saas_warning
+    interval: 30s
+    rules:
+      # === AVERTISSEMENTS ===
+
+      # Trafic anormal (variation >20% vs 1h auparavant)
+      - alert: AnomalousRequestRate
+        expr: |
+          (
+            abs(
+              rate(http_requests_total[5m])
+              -
+              rate(http_requests_total[5m] offset 1h)
+            )
+            /
+            rate(http_requests_total[5m] offset 1h)
+          ) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          sla_impact: 'low'
+          team: 'backend'
+        annotations:
+          summary: "Trafic anormal sur {{ $labels.service }} (variation {{ $value | humanizePercentage }})"
+          description: |
+            Le trafic sur {{ $labels.service }} a varié de {{ $value | humanizePercentage }}
+            par rapport à il y a 1h. Vérifier si c'est attendu (campagne, déploiement).
+          runbook_url: "https://docs.example.com/runbooks/anomalous-traffic"
+
+      # Latence DB élevée (>0.5s P95)
+      - alert: HighDatabaseLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(database_query_duration_seconds_bucket[5m])) by (le, operation)
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          sla_impact: 'medium'
+          team: 'backend'
+        annotations:
+          summary: "Latence DB P95 de {{ $value }}s pour {{ $labels.operation }}"
+          description: |
+            La latence P95 des requêtes DB de type {{ $labels.operation }} est de {{ $value }}s.
+            Performance dégradée - vérifier les index et la charge DB.
+          runbook_url: "https://docs.example.com/runbooks/database-latency"
+
+      # Taux d'erreur modéré (>2% pendant 5min)
+      - alert: ModerateErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status_code=~"5.."}[5m])) by (service)
+            /
+            sum(rate(http_requests_total[5m])) by (service)
+          ) > 0.02
+          AND
+          (
+            sum(rate(http_requests_total{status_code=~"5.."}[5m])) by (service)
+            /
+            sum(rate(http_requests_total[5m])) by (service)
+          ) <= 0.05
+        for: 5m
+        labels:
+          severity: warning
+          sla_impact: 'low'
+          team: 'backend'
+        annotations:
+          summary: "Taux d'erreur modéré {{ $value | humanizePercentage }} sur {{ $labels.service }}"
+          description: |
+            Le taux d'erreur est de {{ $value | humanizePercentage }} sur {{ $labels.service }}.
+            Surveiller de près - risque d'escalade.
+          runbook_url: "https://docs.example.com/runbooks/moderate-error-rate"
+
+  - name: express_saas_business
+    interval: 1m
+    rules:
+      # === MÉTRIQUES MÉTIER ===
+
+      # Chute soudaine des commandes (>30% vs moyenne 24h)
+      - alert: OrderDrop
+        expr: |
+          (
+            rate(orders_total{status="confirmed"}[5m])
+            /
+            avg_over_time(rate(orders_total{status="confirmed"}[5m])[24h:5m])
+          ) < 0.7
+        for: 10m
+        labels:
+          severity: warning
+          sla_impact: 'business'
+          team: 'product'
+        annotations:
+          summary: "Chute de {{ $value | humanizePercentage }} des commandes"
+          description: |
+            Le taux de commandes a chuté de {{ $value | humanizePercentage }} par rapport à la moyenne 24h.
+            Vérifier les problèmes techniques ou événements externes.
+          runbook_url: "https://docs.example.com/runbooks/order-drop"
+
+      # Aucune commande depuis 30min (anormal)
+      - alert: NoOrders
+        expr: |
+          rate(orders_total{status="confirmed"}[30m]) == 0
+        for: 30m
+        labels:
+          severity: critical
+          sla_impact: 'business'
+          team: 'product'
+        annotations:
+          summary: "Aucune commande depuis 30 minutes"
+          description: |
+            Aucune commande n'a été créée depuis 30 minutes. Problème critique business.
+            Vérifier immédiatement le checkout et le flux de paiement.
+          runbook_url: "https://docs.example.com/runbooks/no-orders"
+

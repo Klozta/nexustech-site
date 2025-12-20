@@ -1,0 +1,25 @@
+# Configuration Render pour déploiement automatique
+# Ce fichier permet de configurer le service directement depuis le repo
+
+services:
+  - type: web
+    name: girlycrea-backend
+    env: node
+    region: frankfurt
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    rootDir: girlycrea-site/backend
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SUPABASE_URL
+        sync: false  # À configurer manuellement dans Render Dashboard
+      - key: SUPABASE_KEY
+        sync: false  # À configurer manuellement dans Render Dashboard
+      - key: JWT_SECRET
+        sync: false  # À configurer manuellement dans Render Dashboard
+      - key: JWT_REFRESH_SECRET
+        sync: false  # À configurer manuellement dans Render Dashboard
+      - key: CORS_ORIGIN
+        sync: false  # À configurer manuellement dans Render Dashboard

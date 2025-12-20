@@ -1,0 +1,221 @@
+# Configuration Alertmanager pour GirlyCrea
+# Basée sur recommandations Perplexity 2025
+#
+# Features:
+# - Grouping & Deduplication (réduction 80-90% alertes)
+# - Inhibition intelligente (supprime symptômes si cause alertée)
+# - Routing par sévérité (Slack/Email/PagerDuty)
+# - Silence windows pour déploiements
+
+global:
+  # Temps avant de considérer une alerte résolue
+  resolve_timeout: 5m
+
+  # Templates pour messages
+  # templates:
+  #   - '/etc/alertmanager/templates/*.tmpl'
+
+# Configuration des routes (routing tree)
+route:
+  # Récepteur par défaut
+  receiver: 'default-slack'
+
+  # Grouper les alertes par ces labels (réduction volume)
+  group_by: ['alertname', 'service', 'severity']
+
+  # Attendre 10s pour buffer initial (regrouper alertes simultanées)
+  group_wait: 10s
+
+  # Intervalle minimum entre notifications d'un même groupe
+  group_interval: 10m
+
+  # Intervalle minimum avant de renvoyer une alerte non-résolue
+  repeat_interval: 1h
+
+  # Routes enfants (par sévérité/impact)
+  routes:
+    # === CRITIQUES ===
+    - match:
+        severity: critical
+        sla_impact: 'critical'
+      receiver: 'oncall-pagerduty'
+      group_wait: 0s  # Pas d'attente pour critiques
+      repeat_interval: 5m  # Plus fréquent pour critiques
+      continue: false  # Ne pas continuer après match
+
+    - match:
+        severity: critical
+      receiver: 'slack-critical'
+      group_wait: 10s
+      repeat_interval: 10m
+      continue: false
+
+    # === WARNINGS ===
+    - match:
+        severity: warning
+        sla_impact: 'high'
+      receiver: 'slack-warning'
+      group_wait: 30s
+      repeat_interval: 30m
+      continue: false
+
+    - match:
+        severity: warning
+      receiver: 'slack-archive'
+      group_wait: 1m
+      repeat_interval: 1h
+      continue: false
+
+    # === BUSINESS ALERTS ===
+    - match:
+        sla_impact: 'business'
+      receiver: 'slack-business'
+      group_wait: 2m
+      repeat_interval: 15m
+      continue: false
+
+    # === INFO (archive seulement) ===
+    - match:
+        severity: info
+      receiver: 'slack-archive'
+      group_wait: 5m
+      repeat_interval: 4h
+      continue: false
+
+# Inhibition rules (supprimer alertes symptôme si cause alertée)
+inhibit_rules:
+  # Si service down, supprimer toutes les alertes warning/info pour ce service
+  - source_match:
+      severity: 'critical'
+      alertname: 'ServiceDown'
+    target_match_re:
+      severity: 'warning|info'
+    equal: ['service']
+
+  # Si database down, supprimer HighDatabaseLatency et autres alertes DB
+  - source_match:
+      alertname: 'DatabaseDown'
+    target_match_re:
+      alertname: 'HighDatabaseLatency|HighQueryLatency'
+    equal: ['instance']
+
+  # Si network partition, supprimer tous les timeouts
+  - source_match:
+      alertname: 'NetworkPartition'
+    target_match_re:
+      alertname: '.*Timeout.*|HighLatency.*'
+    equal: ['service']
+
+  # Si critical, supprimer warning pour même alerte
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'service']
+
+# Récepteurs (destinations notifications)
+receivers:
+  # Défaut : Slack général
+  - name: 'default-slack'
+    slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '#alerts-general'
+        title: '🚨 Alert: {{ .GroupLabels.alertname }}'
+        text: |
+          *Severity*: {{ .CommonLabels.severity }}
+          *Service*: {{ .CommonLabels.service }}
+          *Instances affectées*: {{ range .Alerts }}{{ .Labels.instance }} {{ end }}
+
+          {{ range .Alerts }}
+          *Alert*: {{ .Annotations.summary }}
+          *Description*: {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+        actions:
+          - type: button
+            text: 'View in Grafana'
+            url: 'https://grafana.example.com/d/alerts?var-service={{ .CommonLabels.service }}'
+          - type: button
+            text: 'Silence for 1h'
+            url: 'http://alertmanager:9093/#/silences/new?alertname={{ .GroupLabels.alertname }}'
+
+  # Slack critique (channel dédié)
+  - name: 'slack-critical'
+    slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL_CRITICAL}'
+        channel: '#alerts-critical'
+        title: '🔥 CRITICAL: {{ .GroupLabels.alertname }}'
+        text: |
+          *{{ .Alerts | len }} alert(s)*
+          *Severity*: {{ .CommonLabels.severity }}
+          *Service*: {{ .CommonLabels.service }}
+
+          {{ range .Alerts }}
+          *{{ .Labels.instance }}*: {{ .Annotations.summary }}
+          {{ end }}
+        send_resolved: true
+
+  # Slack warning
+  - name: 'slack-warning'
+    slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '#alerts-warning'
+        title: '⚠️ Warning: {{ .GroupLabels.alertname }}'
+        text: |
+          *{{ .Alerts | len }} alert(s)*
+          {{ range .Alerts }}
+          *{{ .Labels.instance }}*: {{ .Annotations.summary }}
+          {{ end }}
+        send_resolved: true
+
+  # Slack archive (low priority)
+  - name: 'slack-archive'
+    slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '#alerts-archive'
+        title: 'ℹ️ {{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}{{ .Annotations.summary }} {{ end }}
+        send_resolved: false  # Pas de notification de résolution pour archive
+
+  # Slack business
+  - name: 'slack-business'
+    slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '#alerts-business'
+        title: '📊 Business Alert: {{ .GroupLabels.alertname }}'
+        text: |
+          *{{ .Alerts | len }} alert(s)*
+          {{ range .Alerts }}
+          *{{ .Labels.instance }}*: {{ .Annotations.summary }}
+          {{ end }}
+        send_resolved: true
+
+  # On-call PagerDuty (pour critiques critiques)
+  - name: 'oncall-pagerduty'
+    pagerduty_configs:
+      - service_key: '${PAGERDUTY_SERVICE_KEY}'
+        description: '{{ .GroupLabels.alertname }}: {{ .CommonAnnotations.summary }}'
+        details:
+          severity: '{{ .CommonLabels.severity }}'
+          service: '{{ .CommonLabels.service }}'
+          instances: '{{ range .Alerts }}{{ .Labels.instance }} {{ end }}'
+    # Fallback vers email si PagerDuty échoue
+    email_configs:
+      - to: '${ONCALL_EMAIL}'
+        from: 'alertmanager@girlycrea.com'
+        smarthost: 'smtp.resend.com:587'
+        auth_username: '${RESEND_API_KEY}'
+        headers:
+          Subject: '🔥 CRITICAL: {{ .GroupLabels.alertname }}'
+        html: |
+          <h2>Critical Alert</h2>
+          <p><strong>Alert:</strong> {{ .GroupLabels.alertname }}</p>
+          <p><strong>Service:</strong> {{ .CommonLabels.service }}</p>
+          <p><strong>Summary:</strong> {{ .CommonAnnotations.summary }}</p>
+          <p><strong>Description:</strong> {{ .CommonAnnotations.description }}</p>
+
+# Templates personnalisés (optionnel)
+# templates:
+#   - '/etc/alertmanager/templates/*.tmpl'
+
